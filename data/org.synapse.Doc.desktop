@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Synapse Doc
+GenericName=Document Reader
+GenericName[it]=Lettore documenti
+Comment=Safe Markdown, AsciiDoc and reStructuredText reader
+Comment[it]=Lettore sicuro per Markdown, AsciiDoc e reStructuredText
+TryExec=synapse-doc
+Exec=synapse-doc tui %f
+Terminal=true
+MimeType=text/markdown;text/x-asciidoc;text/x-rst;
+Categories=Office;Viewer;
+Keywords=document;markdown;asciidoc;rst;reader;
+Keywords[it]=documento;markdown;asciidoc;rst;lettore;

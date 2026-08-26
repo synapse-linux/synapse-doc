@@ -1,0 +1,21 @@
+= Synapse AsciiDoc
+
+A bounded AsciiDoc reader profile.
+
+== Features
+
+* Terminal rendering
+* Offline export
+
+[source,c]
+----
+int main(void) {
+    return 0;
+}
+----
+
+image::images/architecture.png[Architecture]
+
+NOTE: Includes and passthrough are disabled.
+
+include::foreign.adoc[]
