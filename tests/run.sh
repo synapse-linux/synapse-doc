@@ -7,7 +7,7 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 fixtures=$(cd "$(dirname "$0")/fixtures" && pwd)
 
-[[ $($binary --version) == 'synapse-doc 0.1.0-alpha.1' ]]
+[[ $($binary --version) == 'synapse-doc 0.1.0-alpha.2' ]]
 $binary --help | grep -Fq 'Markdown, AsciiDoc and reStructuredText'
 if command -v desktop-file-validate >/dev/null; then desktop-file-validate "$project/data/org.synapse.Doc.desktop"; fi
 
@@ -40,6 +40,135 @@ assert all(set(x)=={"kind","level","text","target","info"} for x in j["blocks"])
   $binary view "$fixtures/$file" --color always >"$root/$format-color.txt"
   grep -q $'\033\[' "$root/$format-color.txt"
 done
+
+# Markdown semantic presentation separates frontmatter and types bounded inline runs.
+$binary present "$fixtures/presentation.md" --format json >"$root/presentation.json"
+$binary present "$fixtures/presentation.md" >"$root/presentation.txt"
+grep -Fxq 'Semantic Markdown presentation: 9 blocks, 26 inline runs, 2 warnings' \
+  "$root/presentation.txt"
+python - "$fixtures/presentation.md" "$root/presentation.json" <<'PY'
+import hashlib,json,sys
+source_path,result_path=sys.argv[1:]
+data=open(source_path,'rb').read()
+j=json.load(open(result_path,encoding='utf-8'))
+assert set(j)=={'schema','format','title','sourceSha256','sourceBytes',
+               'frontmatter','warnings','blocks'}
+assert j['schema']=='synapse.doc.presentation/v1' and j['format']=='markdown'
+assert j['title']=='Semantic Preview'
+assert j['sourceSha256']==hashlib.sha256(data).hexdigest()
+assert j['sourceBytes']==len(data) and j['warnings']==2
+assert set(j['frontmatter'])=={'present','startByte','endByte','title'}
+assert j['frontmatter']['present'] is True
+assert j['frontmatter']['title']=='Semantic Preview'
+front=data[j['frontmatter']['startByte']:j['frontmatter']['endByte']]
+assert front.startswith(b'---\n') and front.endswith(b'---\n')
+assert len(j['blocks'])==9
+assert [x['kind'] for x in j['blocks']]==[
+    'heading','paragraph','image','warning','quote','list-item','code',
+    'paragraph','warning']
+assert all(set(x)=={'kind','level','generated','text','target','info',
+                   'startByte','endByte','textStartByte','textEndByte','runs'}
+           for x in j['blocks'])
+expected_run_keys={'kind','text','target','heading','block','external',
+                   'startByte','endByte','textStartByte','textEndByte'}
+for block in j['blocks']:
+    assert 0 <= block['startByte'] <= block['textStartByte']
+    assert block['textStartByte'] <= block['textEndByte'] <= block['endByte']
+    assert block['endByte'] <= len(data)
+    assert all(set(run)==expected_run_keys for run in block['runs'])
+    if not block['generated'] and block['kind'] not in {'code','rule'}:
+        assert block['text']==''.join(run['text'] for run in block['runs'])
+    previous=block['textStartByte']
+    for run in block['runs']:
+        assert block['textStartByte'] <= run['startByte'] <= run['textStartByte']
+        assert run['textStartByte'] <= run['textEndByte'] <= run['endByte']
+        assert run['endByte'] <= block['textEndByte']
+        assert run['startByte'] >= previous
+        previous=run['endByte']
+        source_text=data[run['textStartByte']:run['textEndByte']].decode('utf-8')
+        assert source_text==run['text']
+heading=j['blocks'][0]
+assert [(x['kind'],x['text']) for x in heading['runs']]==[
+    ('strong','Semantic'),('text',' '),('emphasis','preview')]
+paragraph=j['blocks'][1]
+assert [(x['kind'],x['text'],x['target'],x['heading']) for x in paragraph['runs']
+        if x['kind']!='text']==[
+    ('strong','bold','',''),('emphasis','emphasis','',''),
+    ('code','inline [[inert]]','',''),('link','Guide','docs/Guide.md','Install'),
+    ('wikilink','System architecture','Architecture',''),
+    ('embed','Diagram','assets/diagram.svg',''),
+    ('tag','#inline/tag','inline/tag','')]
+assert r'\*literal*' in paragraph['text']
+assert '~~unknown~~' in j['blocks'][5]['text']
+assert j['blocks'][2]['target']=='https://example.com/image.png'
+assert j['blocks'][2]['runs'][0]['external'] is True
+assert all(x['generated'] for x in j['blocks'] if x['kind']=='warning')
+assert '[[also inert]]' in j['blocks'][6]['text']
+assert '<img src=x onerror=alert(1)>'==j['blocks'][7]['text']
+assert b'aliases:' not in b' '.join(x['text'].encode() for x in j['blocks'])
+PY
+LC_ALL=C $binary present "$fixtures/presentation.md" --format json >"$root/presentation-c.json"
+LC_ALL=ar_SA.UTF-8 $binary present "$fixtures/presentation.md" --format json >"$root/presentation-ar.json"
+cmp "$root/presentation-c.json" "$root/presentation-ar.json"
+LC_ALL=C $binary present "$fixtures/presentation.md" >"$root/presentation-text-c.txt"
+LC_ALL=it_IT.UTF-8 $binary present "$fixtures/presentation.md" >"$root/presentation-text-it.txt"
+cmp "$root/presentation-text-c.txt" "$root/presentation-text-it.txt"
+
+python - "$root/bom-crlf.md" <<'PY'
+import sys
+open(sys.argv[1],'wb').write(
+    b'\xef\xbb\xbf---\r\ntitle: BOM Preview\r\n---\r\n# **Rocket** \xf0\x9f\x9a\x80\r\n')
+PY
+$binary present "$root/bom-crlf.md" --format json >"$root/bom-crlf.json"
+python - "$root/bom-crlf.md" "$root/bom-crlf.json" <<'PY'
+import hashlib,json,sys
+raw=open(sys.argv[1],'rb').read(); j=json.load(open(sys.argv[2]))
+assert j['sourceSha256']==hashlib.sha256(raw).hexdigest()
+assert j['sourceBytes']==len(raw) and j['title']=='BOM Preview'
+assert j['frontmatter']['startByte']==3
+assert raw[j['frontmatter']['startByte']:j['frontmatter']['endByte']].endswith(b'---\r\n')
+assert j['blocks'][0]['text']=='Rocket \U0001f680'
+PY
+printf '   \n' >"$root/empty.md"
+$binary present "$root/empty.md" --format json | python -c '
+import json,sys
+j=json.load(sys.stdin)
+assert j["schema"]=="synapse.doc.presentation/v1" and j["blocks"]==[]
+'
+printf '%s\n' '---' 'title: Missing close' >"$root/unclosed-frontmatter-present.md"
+if $binary present "$root/unclosed-frontmatter-present.md" --format json >/dev/null 2>&1; then
+  echo 'presentation accepted unclosed frontmatter' >&2; exit 1
+fi
+printf '%s\n' '# Draft' 'Typing [[incomplete and *unfinished' >"$root/incomplete-inline.md"
+$binary present "$root/incomplete-inline.md" --format json | python -c '
+import json,sys
+j=json.load(sys.stdin)
+assert j["blocks"][1]["text"]=="Typing [[incomplete and *unfinished"
+'
+printf '%s\n' '```text' '[[inert]]' >"$root/unclosed-present-fence.md"
+$binary present "$root/unclosed-present-fence.md" --format json | python -c '
+import json,sys
+j=json.load(sys.stdin)
+assert [x["kind"] for x in j["blocks"]]==["code","warning"]
+assert j["warnings"]==1 and j["blocks"][0]["text"]=="[[inert]]"
+'
+if $binary present "$fixtures/sample.adoc" --format json >/dev/null 2>&1; then
+  echo 'presentation accepted a non-Markdown profile' >&2; exit 1
+fi
+cp "$fixtures/presentation.md" "$root/no-extension-present"
+$binary present "$root/no-extension-present" --input markdown --format json >/dev/null
+if $binary present "$root/no-extension-present" --format json >/dev/null 2>&1; then
+  echo 'presentation auto-detected an extensionless input' >&2; exit 1
+fi
+python - "$root/too-many-runs.md" <<'PY'
+import sys
+with open(sys.argv[1],'w',encoding='utf-8',newline='\n') as output:
+    for _ in range(1400): output.write('*x* '*100+'\n')
+PY
+if $binary present "$root/too-many-runs.md" --format json >/dev/null 2>&1; then
+  echo 'presentation accepted too many inline runs' >&2; exit 1
+fi
+python3 "$project/tests/test_presentation_random.py" "$binary"
 
 # Markdown knowledge-link extraction is source-ranged, bounded and code-aware.
 $binary links "$fixtures/knowledge.md" --format json >"$root/links.json"
@@ -165,6 +294,9 @@ ln -s "$fixtures/sample.md" "$root/link.md"
 if $binary links "$root/link.md" --format json >/dev/null 2>&1; then
   echo 'links accepted symlink input' >&2; exit 1
 fi
+if $binary present "$root/link.md" --format json >/dev/null 2>&1; then
+  echo 'presentation accepted symlink input' >&2; exit 1
+fi
 for bad in invalid.md nul.md oversize.md long-line.md link.md; do
   if $binary inspect "$root/$bad" >/dev/null 2>&1; then echo "accepted hostile input $bad" >&2; exit 1; fi
 done
@@ -172,6 +304,7 @@ done
 hostile="$root/document;touch PWNED.md"
 cp "$fixtures/sample.md" "$hostile"
 $binary inspect "$hostile" --input markdown --format json >/dev/null
+$binary present "$hostile" --input markdown --format json >/dev/null
 [[ ! -e PWNED && ! -e "$root/PWNED" ]]
 
 echo 'synapse-doc tests: PASS'

@@ -4,7 +4,7 @@
 
 #include <stddef.h>
 
-#define SD_VERSION "0.1.0-alpha.1"
+#define SD_VERSION "0.1.0-alpha.2"
 #define SD_INPUT_LIMIT (8U * 1024U * 1024U)
 #define SD_OUTPUT_LIMIT (32U * 1024U * 1024U)
 #define SD_MAX_BLOCKS 32768U
@@ -16,6 +16,8 @@
 #define SD_MAX_LINKS 65536U
 #define SD_MAX_METADATA_VALUES 4096U
 #define SD_LINK_LABEL_LIMIT 4096U
+#define SD_MAX_PRESENTATION_RUNS 262144U
+#define SD_FRONTMATTER_LIMIT (64U * 1024U)
 
 typedef enum {
     SD_FORMAT_MARKDOWN,
@@ -90,6 +92,63 @@ typedef struct {
     size_t end_byte;
 } sd_link;
 
+typedef enum {
+    SD_INLINE_TEXT,
+    SD_INLINE_EMPHASIS,
+    SD_INLINE_STRONG,
+    SD_INLINE_CODE,
+    SD_INLINE_LINK,
+    SD_INLINE_WIKILINK,
+    SD_INLINE_EMBED,
+    SD_INLINE_IMAGE,
+    SD_INLINE_TAG
+} sd_inline_kind;
+
+typedef struct {
+    sd_inline_kind kind;
+    char *text;
+    char *target;
+    char *heading;
+    char *block;
+    int external;
+    size_t start_byte;
+    size_t end_byte;
+    size_t text_start_byte;
+    size_t text_end_byte;
+} sd_inline_run;
+
+typedef struct {
+    sd_block_kind kind;
+    int level;
+    int generated;
+    char *text;
+    char *target;
+    char *info;
+    size_t start_byte;
+    size_t end_byte;
+    size_t text_start_byte;
+    size_t text_end_byte;
+    sd_inline_run *runs;
+    size_t run_count;
+    size_t run_capacity;
+} sd_presentation_block;
+
+typedef struct {
+    sd_format format;
+    char title[SD_TITLE_LIMIT + 1];
+    char source_sha256[65];
+    size_t source_bytes;
+    int frontmatter_present;
+    size_t frontmatter_start_byte;
+    size_t frontmatter_end_byte;
+    char frontmatter_title[SD_TITLE_LIMIT + 1];
+    sd_presentation_block *blocks;
+    size_t block_count;
+    size_t block_capacity;
+    size_t run_count;
+    size_t warning_count;
+} sd_presentation;
+
 typedef struct {
     char title[SD_TITLE_LIMIT + 1];
     char source_sha256[65];
@@ -123,6 +182,14 @@ int sd_link_index_load(const char *path, sd_link_index *index, char *error,
 const char *sd_link_kind_name(sd_link_kind kind);
 const char *sd_tag_source_name(sd_tag_source source);
 char *sd_link_index_to_json(const sd_link_index *index, size_t *size_out);
+void sd_presentation_init(sd_presentation *presentation);
+void sd_presentation_free(sd_presentation *presentation);
+int sd_presentation_load(const char *path, const char *format_option,
+                         sd_presentation *presentation, char *error,
+                         size_t error_size);
+const char *sd_inline_kind_name(sd_inline_kind kind);
+char *sd_presentation_to_json(const sd_presentation *presentation,
+                              size_t *size_out);
 char *sd_render_terminal(const sd_document *document, int colors, size_t width,
                          size_t *size_out, char *error, size_t error_size);
 char *sd_render_interactive_html(const sd_document *document, size_t *size_out,

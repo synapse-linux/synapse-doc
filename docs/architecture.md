@@ -15,20 +15,27 @@ Input adapters preserve format identity while normalizing safe document blocks.
 Unknown or intentionally disabled constructs are visible warnings. The AST does
 not contain executable callbacks, raw HTML or fetched resources.
 
-Markdown knowledge extraction is a sibling read-only projection rather than an
-extension of `synapse.doc.ast/v1`:
+Markdown knowledge extraction and semantic presentation are sibling read-only
+projections rather than extensions of `synapse.doc.ast/v1`:
 
 ```text
 bounded Markdown source
           │
-          ├── block reader ──────► synapse.doc.ast/v1
-          └── link inventory ────► synapse.doc.links/v1
+          ├── block reader ─────────► synapse.doc.ast/v1
+          ├── link inventory ───────► synapse.doc.links/v1
+          └── semantic presentation ► synapse.doc.presentation/v1
 ```
 
 The link inventory retains byte ranges and typed destinations for wikilinks,
 embeds, Markdown links, frontmatter aliases and tags. It ignores code and does
 not resolve another file, traverse a vault, or execute `.obsidian` content.
-Vault identity and ambiguity resolution belong to a future knowledge indexer.
+Vault identity and ambiguity resolution belong to Synapse Knowledge.
+
+Semantic presentation excludes frontmatter from body blocks and retains bounded
+source ranges for visual blocks and inline roles. It is intentionally tolerant
+of incomplete inline markup so unsaved Editor bytes remain previewable. Code is
+opaque, raw HTML remains text and remote media is never loaded. Presentation
+clients style the typed roles but do not reinterpret Markdown or source text.
 
 The terminal and TUI paths have no graphical dependency. Interactive HTML is a
 derived viewer containing fixed first-party presentation code and escaped model

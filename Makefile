@@ -6,7 +6,7 @@ BINDIR ?= $(PREFIX)/bin
 DATADIR ?= $(PREFIX)/share
 LIBDIR ?= $(PREFIX)/lib
 BUILD_DIR ?= build
-VERSION := 0.1.0-alpha.1
+VERSION := 0.1.0-alpha.2
 
 BASE_CPPFLAGS = -D_FORTIFY_SOURCE=3 -DSYNAPSE_DOC_VERSION='"$(VERSION)"'
 BASE_CFLAGS = -O2 -g -std=c17 -Wall -Wextra -Wpedantic -Werror -fstack-protector-strong -fPIE -march=x86-64 -mtune=generic
@@ -23,12 +23,15 @@ CORE_CFLAGS = -I$(CORE_ROOT)$(PREFIX)/include
 CORE_LIBS = -L$(CORE_ROOT)$(LIBDIR) -lsynapse-core
 TEST_ENV = LD_LIBRARY_PATH=$(CORE_ROOT)$(LIBDIR)
 endif
+CORE_REPRO_FLAGS = $(if $(strip $(CORE_ROOT)),-ffile-prefix-map=$(abspath $(CORE_ROOT))=core \
+	-fdebug-prefix-map=$(abspath $(CORE_ROOT))=core \
+	-fmacro-prefix-map=$(abspath $(CORE_ROOT))=core,)
 
 CPPFLAGS ?=
 CFLAGS ?=
 LDFLAGS ?=
 LDLIBS ?=
-SOURCES = src/main.c src/parse.c src/links.c src/render.c
+SOURCES = src/main.c src/parse.c src/links.c src/presentation.c src/render.c
 OBJECTS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
 TARGET = $(BUILD_DIR)/synapse-doc
 REPRO_FLAGS = -ffile-prefix-map=$(abspath $(BUILD_DIR))=build \
@@ -44,7 +47,7 @@ $(BUILD_DIR):
 
 $(BUILD_DIR)/%.o: src/%.c src/doc_internal.h | $(BUILD_DIR)
 	$(CC) $(BASE_CPPFLAGS) $(CPPFLAGS) $(BASE_CFLAGS) $(CFLAGS) $(REPRO_FLAGS) \
-		$(CORE_CFLAGS) $(shell $(PKG_CONFIG) --cflags $(PKGS)) -c -o "$@" "$<"
+		$(CORE_REPRO_FLAGS) $(CORE_CFLAGS) $(shell $(PKG_CONFIG) --cflags $(PKGS)) -c -o "$@" "$<"
 
 $(TARGET): $(OBJECTS)
 	$(CC) -o "$@" $(OBJECTS) $(BASE_LDFLAGS) $(LDFLAGS) $(CORE_LIBS) \
