@@ -2,6 +2,7 @@
 
 ## Unreleased — 0.1.0-alpha.2
 
+- Re-license the first-party parser, renderer and source metadata under the MIT License.
 - Add bounded Markdown semantic presentation as
   `synapse.doc.presentation/v1` without changing `synapse.doc.ast/v1`.
 - Separate leading YAML frontmatter from visual body blocks and expose only a

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #ifndef SYNAPSE_DOC_INTERNAL_H
 #define SYNAPSE_DOC_INTERNAL_H
 

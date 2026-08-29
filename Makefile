@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 CC ?= cc
 PKG_CONFIG ?= pkg-config
 PREFIX ?= /usr

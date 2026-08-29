@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Deterministic hostile-source validation for synapse.doc.presentation/v1."""
 
 import hashlib
