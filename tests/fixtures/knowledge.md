@@ -1,5 +1,7 @@
 ---
 title: "Knowledge Home"
+sources:
+  - ignored/source
 aliases:
   - Home
   - "Start Here"

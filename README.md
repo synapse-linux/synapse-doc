@@ -22,9 +22,10 @@ The Markdown-only `links` command extracts a bounded source-ranged knowledge
 inventory without changing the reader AST. It recognizes frontmatter title,
 aliases and tags; inline tags; standard Markdown links and images; and
 Obsidian-compatible wikilinks, embeds, heading references and block references.
-Fenced and inline code are inert. Complex YAML values, incomplete fences and
-incomplete links fail explicitly rather than producing an apparently complete
-index.
+Fenced and inline code are inert. Complex relevant YAML values, incomplete
+fences and incomplete wikilinks fail explicitly rather than producing an
+apparently complete index. A truncated ordinary Markdown link or image is inert
+text because it cannot create a resolved knowledge edge.
 
 ## Alpha 1 reader profiles
 

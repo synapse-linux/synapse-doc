@@ -15,6 +15,7 @@
 
 typedef enum {
     META_NONE,
+    META_IGNORE,
     META_ALIASES,
     META_TAGS
 } metadata_list;
@@ -382,9 +383,9 @@ static int parse_frontmatter(const char *data, size_t size, sd_link_index *index
             continue;
         }
         if (data[start] == '-' && start + 1U < end && ascii_space(data[start + 1U])) {
-            if (active == META_NONE) {
-                set_error(error, error_size, "frontmatter sequence has no aliases or tags owner");
-                return -1;
+            if (active == META_NONE || active == META_IGNORE) {
+                position = next_line_for(data, size, position);
+                continue;
             }
             if (add_metadata_scalar(index, active, data, start + 2U, end,
                                     error, error_size) != 0) return -1;
@@ -424,7 +425,7 @@ static int parse_frontmatter(const char *data, size_t size, sd_link_index *index
                                          error, error_size) != 0) return -1;
             } else if (add_metadata_scalar(index, list, data, value_start, value_end,
                                            error, error_size) != 0) return -1;
-        }
+        } else if (value_start == value_end) active = META_IGNORE;
         position = next_line_for(data, size, position);
     }
     set_error(error, error_size, "frontmatter is unclosed or exceeds 64 KiB");
@@ -513,10 +514,7 @@ static int scan_markdown_link(const char *data, size_t line_start, size_t line_e
         }
         cursor++;
     }
-    if (cursor >= line_end) {
-        set_error(error, error_size, "unclosed Markdown link at byte %zu", start);
-        return -1;
-    }
+    if (cursor >= line_end) return 0;
     size_t destination_end = cursor;
     trim_range(data, &destination_start, &destination_end);
     if (destination_start < destination_end && data[destination_start] == '<'
