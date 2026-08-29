@@ -7,6 +7,7 @@ interactive HTML artifact.
 
 ```bash
 synapse-doc inspect README.md --format json
+synapse-doc links notes/home.md --format json
 synapse-doc view README.adoc
 synapse-doc tui architecture.rst
 synapse-doc export README.md --artifact interactive-html --output README.html
@@ -16,6 +17,14 @@ The TUI supports scrolling, paging and Home/End without Wayland. The HTML export
 provides a table of contents, localized search controls and responsive layout.
 All document strings are escaped; model content never becomes raw HTML or
 JavaScript.
+
+The Markdown-only `links` command extracts a bounded source-ranged knowledge
+inventory without changing the reader AST. It recognizes frontmatter title,
+aliases and tags; inline tags; standard Markdown links and images; and
+Obsidian-compatible wikilinks, embeds, heading references and block references.
+Fenced and inline code are inert. Complex YAML values, incomplete fences and
+incomplete links fail explicitly rather than producing an apparently complete
+index.
 
 ## Alpha 1 reader profiles
 
@@ -31,6 +40,8 @@ blocks: raw HTML/passthrough, includes, arbitrary directives/extensions and
 remote image loading. Images currently render as a semantic placeholder with alt
 text and target. Bounded local Sixel rendering is planned separately.
 
-This alpha does not claim full CommonMark/GFM, Asciidoctor or Docutils semantic
-compatibility. Maintained canonical adapters or deeper native parsers remain a
-separate compatibility phase.
+This alpha does not claim full CommonMark/GFM, Obsidian, YAML, Asciidoctor or
+Docutils semantic compatibility. The knowledge-link inventory is an explicit
+safe profile, not a claim of complete Obsidian vault resolution. Maintained
+canonical adapters or deeper native parsers remain a separate compatibility
+phase.

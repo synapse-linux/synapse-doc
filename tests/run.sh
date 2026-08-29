@@ -41,6 +41,76 @@ assert all(set(x)=={"kind","level","text","target","info"} for x in j["blocks"])
   grep -q $'\033\[' "$root/$format-color.txt"
 done
 
+# Markdown knowledge-link extraction is source-ranged, bounded and code-aware.
+$binary links "$fixtures/knowledge.md" --format json >"$root/links.json"
+$binary links "$fixtures/knowledge.md" >"$root/links.txt"
+grep -Fxq 'Markdown link inventory: 9 links, 5 tags, 2 aliases' "$root/links.txt"
+python - "$fixtures/knowledge.md" "$root/links.json" <<'PY'
+import hashlib,json,sys
+source_path,result_path=sys.argv[1:]
+data=open(source_path,'rb').read()
+j=json.load(open(result_path,encoding='utf-8'))
+assert set(j)=={'schema','format','sourceSha256','sourceBytes','frontmatter','tags','links'}
+assert j['schema']=='synapse.doc.links/v1' and j['format']=='markdown'
+assert j['sourceSha256']==hashlib.sha256(data).hexdigest()
+assert j['sourceBytes']==len(data)
+assert j['frontmatter']['present'] is True
+assert j['frontmatter']['title']=='Knowledge Home'
+assert [x['value'] for x in j['frontmatter']['aliases']]==['Home','Start Here']
+assert len(j['links'])==9
+assert [(x['kind'],x['target'],x['heading'],x['block']) for x in j['links']]==[
+ ('wikilink','Architecture','',''),
+ ('wikilink','Folder/Note','',''),
+ ('wikilink','Architecture','Components',''),
+ ('wikilink','Architecture','','block-7'),
+ ('wikilink','','Local heading',''),
+ ('embed','assets/diagram.svg','',''),
+ ('markdown','docs/guide.md','Install',''),
+ ('markdown','https://example.com/path','anchor',''),
+ ('image','assets/image.png','',''),
+]
+assert j['links'][1]['label']=='Displayed note'
+assert j['links'][5]['label']=='Diagram'
+assert j['links'][7]['external'] is True
+assert all(not x['external'] for i,x in enumerate(j['links']) if i != 7)
+assert [(x['value'],x['source']) for x in j['tags']]==[
+ ('knowledge','frontmatter'),('synapse/wiki','frontmatter'),
+ ('inline-tag','inline'),('nested/tag','inline'),('c17','inline')]
+for item in j['links']:
+    span=data[item['startByte']:item['endByte']]
+    assert span.startswith((b'[[',b'![[',b'[',b'!['))
+for item in j['frontmatter']['aliases']+j['tags']:
+    span=data[item['startByte']:item['endByte']].decode('utf-8')
+    assert span.lstrip('#')==item['value']
+assert b'Fenced code' not in open(result_path,'rb').read()
+assert b'Inline code' not in open(result_path,'rb').read()
+assert b'Not a link' not in open(result_path,'rb').read()
+PY
+LC_ALL=C $binary links "$fixtures/knowledge.md" --format json >"$root/links-c.json"
+LC_ALL=it_IT.UTF-8 $binary links "$fixtures/knowledge.md" --format json >"$root/links-it.json"
+cmp "$root/links-c.json" "$root/links-it.json"
+
+printf '%s\n' '` unmatched [[literal-after-backtick]] and [empty]()' >"$root/unmatched-inline.md"
+$binary links "$root/unmatched-inline.md" --format json | python -c '
+import json,sys
+j=json.load(sys.stdin)
+assert [(x["kind"],x["target"]) for x in j["links"]]==[("wikilink","literal-after-backtick"),("markdown","")]
+'
+printf '%s\n' '---' 'nested:' '  aliases: not-top-level' '---' '[[ok]]' >"$root/nested-frontmatter.md"
+$binary links "$root/nested-frontmatter.md" --format json | python -c '
+import json,sys
+j=json.load(sys.stdin)
+assert j["frontmatter"]["aliases"]==[] and len(j["links"])==1
+'
+
+printf '%s\n' '[[unclosed' >"$root/unclosed-link.md"
+printf '%s\n' '```' '[[hidden]]' >"$root/unclosed-fence.md"
+printf '%s\n' '---' 'aliases: {bad: value}' '---' 'body' >"$root/complex-frontmatter.md"
+for bad in unclosed-link.md unclosed-fence.md complex-frontmatter.md; do
+  if $binary links "$root/$bad" --format json >/dev/null 2>&1; then
+    echo "accepted incomplete knowledge syntax $bad" >&2; exit 1
+  fi
+done
 export SOURCE_DATE_EPOCH=1787732185
 $binary export "$fixtures/sample.md" --artifact interactive-html --output "$root/a.html" --format json >"$root/export.json"
 $binary export "$fixtures/sample.md" --artifact interactive-html --output "$root/b.html" >/dev/null
@@ -92,6 +162,9 @@ import sys
 open(sys.argv[1],'w').write('x'*65537+'\n')
 PY
 ln -s "$fixtures/sample.md" "$root/link.md"
+if $binary links "$root/link.md" --format json >/dev/null 2>&1; then
+  echo 'links accepted symlink input' >&2; exit 1
+fi
 for bad in invalid.md nul.md oversize.md long-line.md link.md; do
   if $binary inspect "$root/$bad" >/dev/null 2>&1; then echo "accepted hostile input $bad" >&2; exit 1; fi
 done

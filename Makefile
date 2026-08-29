@@ -28,7 +28,7 @@ CPPFLAGS ?=
 CFLAGS ?=
 LDFLAGS ?=
 LDLIBS ?=
-SOURCES = src/main.c src/parse.c src/render.c
+SOURCES = src/main.c src/parse.c src/links.c src/render.c
 OBJECTS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
 TARGET = $(BUILD_DIR)/synapse-doc
 REPRO_FLAGS = -ffile-prefix-map=$(abspath $(BUILD_DIR))=build \
