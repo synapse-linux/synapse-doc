@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #define _POSIX_C_SOURCE 200809L
 
 #include "doc_internal.h"
@@ -471,29 +471,44 @@ static int detect_format(const char *path, const char *option, sd_format *format
     return 0;
 }
 
-int sd_document_load(const char *path, const char *format_option, sd_document *document,
-                     char *error, size_t error_size) {
-    if (detect_format(path, format_option ? format_option : "auto", &document->format) != 0) {
-        set_error(error, error_size, "unknown document format; use --input markdown|asciidoc|rst");
-        return -1;
-    }
+int sd_read_source(const char *path, char **data_out, size_t *size_out, char hash_out[65],
+                   char *error, size_t error_size) {
     struct stat status;
-    if (lstat(path, &status) != 0 || !S_ISREG(status.st_mode) || status.st_size < 0
+    if (!path || !data_out || !size_out || !hash_out || lstat(path, &status) != 0
+        || !S_ISREG(status.st_mode) || status.st_size < 0
         || (uint64_t)status.st_size > SD_INPUT_LIMIT) {
         set_error(error, error_size, "input must be a regular non-symlink file up to 8 MiB");
         return -1;
     }
     size_t size = 0;
     char *data = synapse_read_file(path, SD_INPUT_LIMIT, &size);
-    if (!data || size != (size_t)status.st_size || !utf8_valid((const unsigned char *)data, size)) {
+    if (!data || size != (size_t)status.st_size
+        || !utf8_valid((const unsigned char *)data, size)) {
         free(data);
         set_error(error, error_size, "input is incomplete, non-UTF-8 or contains NUL");
         return -1;
     }
-    document->source_bytes = size;
-    if (sd_sha256_hex(data, size, document->source_sha256) != 0) {
-        free(data); set_error(error, error_size, "cannot hash document"); return -1;
+    if (sd_sha256_hex(data, size, hash_out) != 0) {
+        free(data);
+        set_error(error, error_size, "cannot hash document");
+        return -1;
     }
+    *data_out = data;
+    *size_out = size;
+    return 0;
+}
+
+int sd_document_load(const char *path, const char *format_option, sd_document *document,
+                     char *error, size_t error_size) {
+    if (detect_format(path, format_option ? format_option : "auto", &document->format) != 0) {
+        set_error(error, error_size, "unknown document format; use --input markdown|asciidoc|rst");
+        return -1;
+    }
+    size_t size = 0;
+    char *data = NULL;
+    if (sd_read_source(path, &data, &size, document->source_sha256,
+                       error, error_size) != 0) return -1;
+    document->source_bytes = size;
     const char *base = strrchr(path, '/'); base = base ? base + 1 : path;
     char fallback_title[SD_TITLE_LIMIT + 1];
     size_t base_size = strlen(base); if (base_size > SD_TITLE_LIMIT) base_size = SD_TITLE_LIMIT;

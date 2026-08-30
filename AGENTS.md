@@ -3,11 +3,16 @@
 - The authoritative implementation is a C17 CLI/TUI built against released
   `libsynapse-core`; it must remain useful on a TTY, over SSH and in Recovery.
 - Markdown, AsciiDoc and reStructuredText are separate input profiles normalized
-  into exact-major `synapse.doc.ast/v1`. Unsupported constructs remain explicit;
-  never silently claim complete language compatibility.
+  into exact-major `synapse.doc.ast/v1`. Markdown semantic presentation is a
+  sibling source-ranged contract and must not silently change the reader AST.
+  Unsupported constructs remain explicit; never silently claim complete language
+  compatibility.
 - Raw HTML, passthrough, extensions, remote resources, executable directives and
   unconstrained includes are disabled. Future local includes require a bounded
   root and cycle/depth guards.
+- Link rewrite planning is read-only and reuses the authoritative Markdown link
+  parser. Preserve labels, fragments, titles and unrelated bytes; emit exact
+  target preimages/ranges for Editor rather than writing a document.
 - Render model strings only as escaped text. Never pass source prose, paths,
   roles, attributes or directives to a shell.
 - Interactive HTML is offline, self-contained and derived. It performs no

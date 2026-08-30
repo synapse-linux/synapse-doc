@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 #define _POSIX_C_SOURCE 200809L
 
 #include "doc_internal.h"
@@ -19,6 +19,9 @@ static void usage(FILE *output) {
           "  synapse-doc inspect INPUT [--input auto|markdown|asciidoc|rst] [--format text|json]\n"
           "  synapse-doc view INPUT [--input auto|markdown|asciidoc|rst] [--format text|json]\n"
           "                         [--color auto|always|never] [--width COLUMNS]\n"
+          "  synapse-doc present INPUT [--input auto|markdown] [--format text|json]\n"
+          "  synapse-doc links INPUT [--format text|json]\n"
+          "  synapse-doc rewrite-links INPUT --plan PLAN [--format text|json]\n"
           "  synapse-doc tui INPUT [--input auto|markdown|asciidoc|rst]\n"
           "  synapse-doc export INPUT --artifact text|interactive-html --output FILE\n"
           "                          [--input auto|markdown|asciidoc|rst] [--format text|json]\n"
@@ -128,6 +131,127 @@ static int command_view(int argc, char **argv) {
     sd_document_free(&document); return 0;
 }
 
+static int command_present(int argc, char **argv) {
+    if (argc < 3) return 2;
+    const char *path = argv[2], *input = "auto";
+    output_format format = OUTPUT_TEXT;
+    for (int i = 3; i < argc; i++) {
+        if (strcmp(argv[i], "--input") == 0 && i + 1 < argc) input = argv[++i];
+        else if (strcmp(argv[i], "--format") == 0 && i + 1 < argc) {
+            if (parse_format(argv[++i], &format) != 0) return 2;
+        } else return 2;
+    }
+    sd_presentation presentation;
+    sd_presentation_init(&presentation);
+    char error[512] = {0};
+    if (sd_presentation_load(path, input, &presentation,
+                             error, sizeof(error)) != 0) {
+        fprintf(stderr, "synapse-doc: %s\n",
+                error[0] ? error : strerror(errno));
+        sd_presentation_free(&presentation);
+        return 1;
+    }
+    if (format == OUTPUT_JSON) {
+        size_t size = 0;
+        char *json = sd_presentation_to_json(&presentation, &size);
+        if (!json) {
+            fprintf(stderr, "synapse-doc: presentation output exceeds bound\n");
+            sd_presentation_free(&presentation);
+            return 1;
+        }
+        fwrite(json, 1, size, stdout);
+        fputc('\n', stdout);
+        free(json);
+    } else {
+        printf("Semantic Markdown presentation: %zu blocks, %zu inline runs, "
+               "%zu warnings\n", presentation.block_count,
+               presentation.run_count, presentation.warning_count);
+    }
+    sd_presentation_free(&presentation);
+    return 0;
+}
+
+static int command_links(int argc, char **argv) {
+    if (argc < 3) return 2;
+    const char *path = argv[2];
+    output_format format = OUTPUT_TEXT;
+    for (int i = 3; i < argc; i++) {
+        if (strcmp(argv[i], "--format") == 0 && i + 1 < argc) {
+            if (parse_format(argv[++i], &format) != 0) return 2;
+        } else return 2;
+    }
+    sd_link_index index;
+    sd_link_index_init(&index);
+    char error[512] = {0};
+    if (sd_link_index_load(path, &index, error, sizeof(error)) != 0) {
+        fprintf(stderr, "synapse-doc: %s\n", error[0] ? error : strerror(errno));
+        sd_link_index_free(&index);
+        return 1;
+    }
+    if (format == OUTPUT_JSON) {
+        size_t size = 0;
+        char *json = sd_link_index_to_json(&index, &size);
+        if (!json) {
+            sd_link_index_free(&index);
+            return 1;
+        }
+        fwrite(json, 1, size, stdout);
+        fputc('\n', stdout);
+        free(json);
+    } else {
+        printf("Markdown link inventory: %zu links, %zu tags, %zu aliases\n",
+               index.link_count, index.tag_count, index.alias_count);
+    }
+    sd_link_index_free(&index);
+    return 0;
+}
+
+static int command_rewrite_links(int argc, char **argv) {
+    if (argc < 5) return 2;
+    const char *path = argv[2];
+    const char *plan = NULL;
+    output_format format = OUTPUT_TEXT;
+    int format_seen = 0;
+    for (int i = 3; i < argc; i++) {
+        if (strcmp(argv[i], "--plan") == 0 && i + 1 < argc && !plan)
+            plan = argv[++i];
+        else if (strcmp(argv[i], "--format") == 0 && i + 1 < argc
+                 && !format_seen) {
+            if (parse_format(argv[++i], &format) != 0) return 2;
+            format_seen = 1;
+        } else return 2;
+    }
+    if (!plan) return 2;
+    sd_link_index index;
+    sd_link_index_init(&index);
+    char error[512] = {0};
+    if (sd_link_index_load(path, &index, error, sizeof(error)) != 0) {
+        fprintf(stderr, "synapse-doc: %s\n", error[0] ? error : strerror(errno));
+        sd_link_index_free(&index);
+        return 1;
+    }
+    size_t size = 0;
+    size_t operations = 0;
+    char *json = sd_link_rewrite_to_json(&index, plan, &size, &operations,
+                                         error, sizeof(error));
+    if (!json) {
+        fprintf(stderr, "synapse-doc: %s\n",
+                error[0] ? error : "cannot create link rewrite result");
+        sd_link_index_free(&index);
+        return 1;
+    }
+    if (format == OUTPUT_JSON) {
+        fwrite(json, 1, size, stdout);
+        fputc('\n', stdout);
+    } else {
+        printf("Markdown link rewrite: %zu exact replacement%s\n",
+               operations, operations == 1 ? "" : "s");
+    }
+    free(json);
+    sd_link_index_free(&index);
+    return 0;
+}
+
 static int command_tui(int argc, char **argv) {
     if (argc < 3) return 2;
     const char *path = argv[2], *input = "auto";
@@ -188,6 +312,10 @@ int main(int argc, char **argv) {
     int result = 2;
     if (argc >= 2 && strcmp(argv[1], "inspect") == 0) result = command_inspect(argc, argv);
     else if (argc >= 2 && strcmp(argv[1], "view") == 0) result = command_view(argc, argv);
+    else if (argc >= 2 && strcmp(argv[1], "present") == 0) result = command_present(argc, argv);
+    else if (argc >= 2 && strcmp(argv[1], "links") == 0) result = command_links(argc, argv);
+    else if (argc >= 2 && strcmp(argv[1], "rewrite-links") == 0)
+        result = command_rewrite_links(argc, argv);
     else if (argc >= 2 && strcmp(argv[1], "tui") == 0) result = command_tui(argc, argv);
     else if (argc >= 2 && strcmp(argv[1], "export") == 0) result = command_export(argc, argv);
     if (result == 2) usage(stderr);
