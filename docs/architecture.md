@@ -23,6 +23,7 @@ bounded Markdown source
           │
           ├── block reader ─────────► synapse.doc.ast/v1
           ├── link inventory ───────► synapse.doc.links/v1
+          ├── link rewrite planner ─► synapse.doc.link-rewrite/v1
           └── semantic presentation ► synapse.doc.presentation/v1
 ```
 
@@ -31,7 +32,14 @@ embeds, Markdown links, frontmatter aliases and tags. It ignores code and does
 not resolve another file, traverse a vault, or execute `.obsidian` content.
 Vault identity and ambiguity resolution belong to Synapse Knowledge.
 
-Semantic presentation excludes frontmatter from body blocks and retains bounded
+The rewrite planner consumes ranges from that unchanged link inventory and
+revalidates them against the same source hash, parsed kind and semantic fields.
+It exposes only the smallest exact target preimage/replacement range needed for
+an authorized rename. It never writes a file or decides vault-relative target
+spelling: Knowledge owns identity/relative-path policy and Editor owns the
+multi-file CAS transaction.
+
+Semantic presentation excludes frontmatter from body blocks from body blocks and retains bounded
 source ranges for visual blocks and inline roles. It is intentionally tolerant
 of incomplete inline markup so unsaved Editor bytes remain previewable. Code is
 opaque, raw HTML remains text and remote media is never loaded. Presentation

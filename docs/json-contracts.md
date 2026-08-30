@@ -46,6 +46,37 @@ and half-open byte range. The scanner does not resolve paths or read another
 file. Fenced code, inline code and escaped wikilinks are inert. Unsupported
 complex values and incomplete relevant syntax fail explicitly.
 
+## `synapse.doc.link-rewrite-plan/v1`
+
+Read-only input to `rewrite-links`, containing exactly `schema`,
+`sourceSha256` and `operations`. Each operation contains exactly `kind`, the
+full-link `startByte`/`endByte` range previously returned by `links/v1`,
+`heading`, `block`, `label` and `newTarget`. Operations are ordered,
+non-overlapping and bounded to 65,536. The source hash and every semantic field
+must still match the same parser result.
+
+`newTarget` is the already-resolved target spelling supplied by the Knowledge
+client. It may not be absolute, external, control-bearing or contain delimiters
+that would change the typed link. Markdown destinations requiring spaces or
+parentheses are safely angle-enclosed together with their existing fragment;
+existing labels, optional titles and outer syntax are retained byte-for-byte.
+
+## `synapse.doc.link-rewrite/v1`
+
+Successful read-only planning output containing exactly `schema`,
+`sourceSha256`, `sourceBytes` and `operations`. Each output operation contains
+exactly:
+
+- `kind`, `linkStartByte` and `linkEndByte`, echoing the matched typed link;
+- target replacement `startByte` and `endByte`;
+- `before`, the exact UTF-8 source preimage at that range;
+- `text`, the replacement bytes.
+
+The command does not mutate the document. Consumers must preserve the source
+hash, ranges and preimages when constructing an Editor-owned transaction.
+`synapse.doc.ast/v1`, `synapse.doc.links/v1` and
+`synapse.doc.presentation/v1` retain their existing field sets.
+
 ## `synapse.doc.export/v1`
 
 Receipt for an atomically published text or interactive-HTML artifact. Includes
