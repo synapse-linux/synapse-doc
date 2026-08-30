@@ -6,7 +6,7 @@ BINDIR ?= $(PREFIX)/bin
 DATADIR ?= $(PREFIX)/share
 LIBDIR ?= $(PREFIX)/lib
 BUILD_DIR ?= build
-VERSION := 0.1.0-alpha.2
+VERSION := 0.1.0-alpha.3
 
 BASE_CPPFLAGS = -D_FORTIFY_SOURCE=3 -DSYNAPSE_DOC_VERSION='"$(VERSION)"'
 BASE_CFLAGS = -O2 -g -std=c17 -Wall -Wextra -Wpedantic -Werror -fstack-protector-strong -fPIE -march=x86-64 -mtune=generic

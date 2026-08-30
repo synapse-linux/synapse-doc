@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased — 0.1.0-alpha.2
+## Unreleased — 0.1.0-alpha.3
+
+- Add read-only `synapse.doc.link-rewrite-plan/v1` and
+  `synapse.doc.link-rewrite/v1` contracts that revalidate source-ranged links and
+  emit exact target preimages/replacements without changing `links/v1`.
+- Preserve labels, fragments, Markdown titles, angle enclosure and unrelated
+  source bytes while rejecting unrepresentable or external replacement targets.
+- Parse angle-enclosed Markdown destinations followed by optional titles.
+
+## 0.1.0-alpha.2
 
 - Re-license the first-party parser, renderer and source metadata under the MIT License.
 - Add bounded Markdown semantic presentation as

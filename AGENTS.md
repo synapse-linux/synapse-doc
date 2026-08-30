@@ -10,6 +10,9 @@
 - Raw HTML, passthrough, extensions, remote resources, executable directives and
   unconstrained includes are disabled. Future local includes require a bounded
   root and cycle/depth guards.
+- Link rewrite planning is read-only and reuses the authoritative Markdown link
+  parser. Preserve labels, fragments, titles and unrelated bytes; emit exact
+  target preimages/ranges for Editor rather than writing a document.
 - Render model strings only as escaped text. Never pass source prose, paths,
   roles, attributes or directives to a shell.
 - Interactive HTML is offline, self-contained and derived. It performs no

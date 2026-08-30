@@ -8,6 +8,7 @@ interactive HTML artifact.
 ```bash
 synapse-doc inspect README.md --format json
 synapse-doc links notes/home.md --format json
+synapse-doc rewrite-links notes/home.md --plan rewrite.json --format json
 synapse-doc present notes/home.md --format json
 synapse-doc view README.adoc
 synapse-doc tui architecture.rst
@@ -27,6 +28,15 @@ Fenced and inline code are inert. Complex relevant YAML values, incomplete
 fences and incomplete wikilinks fail explicitly rather than producing an
 apparently complete index. A truncated ordinary Markdown link or image is inert
 text because it cannot create a resolved knowledge edge.
+
+`rewrite-links` is a read-only semantic planning command. It accepts exact
+`links/v1` occurrence ranges, expected kind/heading/block/label values and a new
+note target. The same parser must match every occurrence and the source hash
+before it emits target-only replacement ranges with exact preimages. Labels,
+fragments, Markdown titles, surrounding syntax and all unrelated bytes remain
+unchanged. Targets that cannot be represented without changing resolution
+semantics fail closed. The command never writes the source; Synapse Editor owns
+the later multi-file transaction.
 
 The Markdown-only `present` command produces a separate bounded semantic
 presentation contract. Leading frontmatter is excluded from visual blocks and a

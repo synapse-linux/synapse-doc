@@ -4,7 +4,7 @@
 
 #include <stddef.h>
 
-#define SD_VERSION "0.1.0-alpha.2"
+#define SD_VERSION "0.1.0-alpha.3"
 #define SD_INPUT_LIMIT (8U * 1024U * 1024U)
 #define SD_OUTPUT_LIMIT (32U * 1024U * 1024U)
 #define SD_MAX_BLOCKS 32768U
@@ -18,6 +18,7 @@
 #define SD_LINK_LABEL_LIMIT 4096U
 #define SD_MAX_PRESENTATION_RUNS 262144U
 #define SD_FRONTMATTER_LIMIT (64U * 1024U)
+#define SD_REWRITE_PLAN_LIMIT (8U * 1024U * 1024U)
 
 typedef enum {
     SD_FORMAT_MARKDOWN,
@@ -90,6 +91,11 @@ typedef struct {
     int external;
     size_t start_byte;
     size_t end_byte;
+    size_t destination_start_byte;
+    size_t destination_end_byte;
+    size_t target_start_byte;
+    size_t target_end_byte;
+    int target_enclosed;
 } sd_link;
 
 typedef enum {
@@ -163,6 +169,7 @@ typedef struct {
     size_t link_count;
     size_t link_capacity;
     int frontmatter_present;
+    char *source_data;
 } sd_link_index;
 
 void sd_document_init(sd_document *document);
@@ -182,6 +189,9 @@ int sd_link_index_load(const char *path, sd_link_index *index, char *error,
 const char *sd_link_kind_name(sd_link_kind kind);
 const char *sd_tag_source_name(sd_tag_source source);
 char *sd_link_index_to_json(const sd_link_index *index, size_t *size_out);
+char *sd_link_rewrite_to_json(const sd_link_index *index, const char *plan_path,
+                              size_t *size_out, size_t *operation_count,
+                              char *error, size_t error_size);
 void sd_presentation_init(sd_presentation *presentation);
 void sd_presentation_free(sd_presentation *presentation);
 int sd_presentation_load(const char *path, const char *format_option,

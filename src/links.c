@@ -89,6 +89,7 @@ void sd_link_index_free(sd_link_index *index) {
     free(index->aliases);
     free(index->tags);
     free(index->links);
+    free(index->source_data);
     sd_link_index_init(index);
 }
 
@@ -168,8 +169,10 @@ static int escaped_at(const char *data, size_t position, size_t floor) {
     return (slashes & 1U) != 0;
 }
 
-static int split_destination(const char *data, size_t start, size_t end, int allow_empty,
-                             char **target_out, char **heading_out, char **block_out,
+static int split_destination(const char *data, size_t start, size_t end,
+                             int allow_empty, char **target_out,
+                             char **heading_out, char **block_out,
+                             size_t *target_start_out, size_t *target_end_out,
                              char *error, size_t error_size) {
     trim_range(data, &start, &end);
     size_t hash = end;
@@ -206,6 +209,8 @@ static int split_destination(const char *data, size_t start, size_t end, int all
     *target_out = target;
     *heading_out = heading;
     *block_out = block;
+    *target_start_out = start;
+    *target_end_out = target_end;
     return 0;
 fail:
     free(target);
@@ -218,8 +223,9 @@ fail:
 
 static int add_link(sd_link_index *index, sd_link_kind kind, const char *data,
                     size_t destination_start, size_t destination_end,
-                    size_t label_start, size_t label_end, size_t start_byte,
-                    size_t end_byte, char *error, size_t error_size) {
+                    int target_enclosed, size_t label_start, size_t label_end,
+                    size_t start_byte, size_t end_byte,
+                    char *error, size_t error_size) {
     if (end_byte < start_byte || end_byte > index->source_bytes) {
         set_error(error, error_size, "link source range is invalid");
         return -1;
@@ -229,10 +235,15 @@ static int add_link(sd_link_index *index, sd_link_kind kind, const char *data,
         set_error(error, error_size, "link count exceeds bound or allocation failed");
         return -1;
     }
-    sd_link link = {.kind = kind, .start_byte = start_byte, .end_byte = end_byte};
+    sd_link link = {.kind = kind, .start_byte = start_byte,
+                    .end_byte = end_byte,
+                    .destination_start_byte = destination_start,
+                    .destination_end_byte = destination_end,
+                    .target_enclosed = target_enclosed};
     if (split_destination(data, destination_start, destination_end,
                           kind == SD_LINK_MARKDOWN || kind == SD_LINK_IMAGE,
                           &link.target, &link.heading, &link.block,
+                          &link.target_start_byte, &link.target_end_byte,
                           error, error_size) != 0) return -1;
     trim_range(data, &label_start, &label_end);
     link.label = copy_range(data, label_start, label_end, SD_LINK_LABEL_LIMIT);
@@ -487,7 +498,8 @@ static int scan_wikilink(const char *data, size_t line_start, size_t line_end,
         }
     }
     if (add_link(index, embed ? SD_LINK_EMBED : SD_LINK_WIKILINK, data,
-                 content_start, pipe, pipe < close ? pipe + 1U : close, close,
+                 content_start, pipe, 0,
+                 pipe < close ? pipe + 1U : close, close,
                  start, close + 2U, error, error_size) != 0) return -1;
     *position = close + 2U;
     return 1;
@@ -516,19 +528,27 @@ static int scan_markdown_link(const char *data, size_t line_start, size_t line_e
     }
     if (cursor >= line_end) return 0;
     size_t destination_end = cursor;
+    int target_enclosed = 0;
     trim_range(data, &destination_start, &destination_end);
-    if (destination_start < destination_end && data[destination_start] == '<'
-        && data[destination_end - 1U] == '>') {
+    if (destination_start < destination_end && data[destination_start] == '<') {
+        size_t closing = destination_start + 1U;
+        while (closing < destination_end
+               && (data[closing] != '>'
+                   || escaped_at(data, closing, destination_start + 1U)))
+            closing++;
+        if (closing == destination_end) return 0;
+        target_enclosed = 1;
         destination_start++;
-        destination_end--;
+        destination_end = closing;
     } else {
         size_t first_space = destination_start;
         while (first_space < destination_end && !ascii_space(data[first_space])) first_space++;
         destination_end = first_space;
     }
     if (add_link(index, image ? SD_LINK_IMAGE : SD_LINK_MARKDOWN, data,
-                 destination_start, destination_end, open + 1U, close,
-                 start, cursor + 1U, error, error_size) != 0) return -1;
+                 destination_start, destination_end, target_enclosed,
+                 open + 1U, close, start, cursor + 1U,
+                 error, error_size) != 0) return -1;
     *position = cursor + 1U;
     return 1;
 }
@@ -637,7 +657,8 @@ int sd_link_index_load(const char *path, sd_link_index *index, char *error,
     size_t body_start = 0;
     int result = parse_frontmatter(data, size, index, &body_start, error, error_size);
     if (result == 0) result = scan_body(data, size, body_start, index, error, error_size);
-    free(data);
+    if (result == 0) index->source_data = data;
+    else free(data);
     if (result != 0) {
         sd_link_index_free(index);
         return -1;
@@ -724,5 +745,269 @@ fail:
     if (aliases) json_object_put(aliases);
     if (frontmatter) json_object_put(frontmatter);
     if (root) json_object_put(root);
+    return NULL;
+}
+
+static json_object *parse_json_exact(const char *data, size_t size) {
+    if (!data || size == 0 || size > INT32_MAX) return NULL;
+    json_tokener *tokener = json_tokener_new_ex(64);
+    if (!tokener) return NULL;
+    json_object *root = json_tokener_parse_ex(tokener, data, (int)size);
+    enum json_tokener_error status = json_tokener_get_error(tokener);
+    size_t consumed = json_tokener_get_parse_end(tokener);
+    while (consumed < size && ascii_space(data[consumed])) consumed++;
+    json_tokener_free(tokener);
+    if (status != json_tokener_success || !root || consumed != size
+        || !json_object_is_type(root, json_type_object)) {
+        if (root) json_object_put(root);
+        return NULL;
+    }
+    return root;
+}
+
+static const char *rewrite_json_string(json_object *owner, const char *key,
+                                       size_t limit) {
+    json_object *value = NULL;
+    if (!json_object_object_get_ex(owner, key, &value)
+        || !json_object_is_type(value, json_type_string)) return NULL;
+    size_t size = (size_t)json_object_get_string_len(value);
+    const char *text = json_object_get_string(value);
+    if (!text || size > limit || strlen(text) != size) return NULL;
+    return text;
+}
+
+static int rewrite_json_size(json_object *owner, const char *key,
+                             size_t maximum, size_t *result) {
+    json_object *value = NULL;
+    if (!json_object_object_get_ex(owner, key, &value)
+        || !json_object_is_type(value, json_type_int)) return -1;
+    int64_t number = json_object_get_int64(value);
+    if (number < 0 || (uint64_t)number > maximum) return -1;
+    *result = (size_t)number;
+    return 0;
+}
+
+static int rewrite_kind(const char *name, sd_link_kind *kind) {
+    if (strcmp(name, "wikilink") == 0) *kind = SD_LINK_WIKILINK;
+    else if (strcmp(name, "embed") == 0) *kind = SD_LINK_EMBED;
+    else if (strcmp(name, "markdown") == 0) *kind = SD_LINK_MARKDOWN;
+    else if (strcmp(name, "image") == 0) *kind = SD_LINK_IMAGE;
+    else return -1;
+    return 0;
+}
+
+static int safe_rewrite_target(const char *target, sd_link_kind kind,
+                               int *enclose) {
+    size_t size = target ? strlen(target) : 0;
+    if (size == 0 || size > SD_TARGET_LIMIT || target[0] == '/') return 0;
+    *enclose = 0;
+    for (size_t i = 0; i < size; i++) {
+        unsigned char ch = (unsigned char)target[i];
+        if (ch < 0x20U || ch == 0x7fU || ch == '#' || ch == '\\') return 0;
+        if ((kind == SD_LINK_WIKILINK || kind == SD_LINK_EMBED)
+            && (ch == '|' || ch == '[' || ch == ']')) return 0;
+        if ((kind == SD_LINK_MARKDOWN || kind == SD_LINK_IMAGE)
+            && (ch == '<' || ch == '>')) return 0;
+        if ((kind == SD_LINK_MARKDOWN || kind == SD_LINK_IMAGE)
+            && (ascii_space((char)ch) || ch == '(' || ch == ')')) *enclose = 1;
+    }
+    return !is_external_target(target)
+           && strncmp(target, "mailto:", 7) != 0
+           && strncmp(target, "data:", 5) != 0;
+}
+
+static const sd_link *find_rewrite_link(const sd_link_index *index,
+                                        size_t start, size_t end) {
+    const sd_link *match = NULL;
+    for (size_t i = 0; i < index->link_count; i++) {
+        const sd_link *candidate = &index->links[i];
+        if (candidate->start_byte != start || candidate->end_byte != end) continue;
+        if (match) return NULL;
+        match = candidate;
+    }
+    return match;
+}
+
+static char *rewrite_text(const sd_link_index *index, const sd_link *link,
+                          const char *target, size_t *start_out,
+                          size_t *end_out) {
+    int enclose = 0;
+    if (!safe_rewrite_target(target, link->kind, &enclose)) return NULL;
+    size_t target_size = strlen(target);
+    int add_enclosure = enclose && !link->target_enclosed;
+    size_t suffix_size = 0;
+    if (add_enclosure) {
+        if (link->destination_start_byte > link->target_start_byte
+            || link->target_end_byte > link->destination_end_byte
+            || link->destination_end_byte > index->source_bytes) return NULL;
+        suffix_size = link->destination_end_byte - link->target_end_byte;
+        *start_out = link->destination_start_byte;
+        *end_out = link->destination_end_byte;
+    } else {
+        *start_out = link->target_start_byte;
+        *end_out = link->target_end_byte;
+    }
+    if (target_size > SIZE_MAX - suffix_size
+        || target_size + suffix_size > SIZE_MAX - (add_enclosure ? 3U : 1U))
+        return NULL;
+    size_t allocation = target_size + suffix_size
+                        + (add_enclosure ? 3U : 1U);
+    char *text = malloc(allocation);
+    if (!text) return NULL;
+    size_t used = 0;
+    if (add_enclosure) text[used++] = '<';
+    memcpy(text + used, target, target_size);
+    used += target_size;
+    if (add_enclosure && suffix_size) {
+        memcpy(text + used, index->source_data + link->target_end_byte,
+               suffix_size);
+        used += suffix_size;
+    }
+    if (add_enclosure) text[used++] = '>';
+    text[used] = '\0';
+    return text;
+}
+
+char *sd_link_rewrite_to_json(const sd_link_index *index, const char *plan_path,
+                              size_t *size_out, size_t *operation_count,
+                              char *error, size_t error_size) {
+    if (!index || !index->source_data || !plan_path || !operation_count) {
+        set_error(error, error_size, "link rewrite request is invalid");
+        return NULL;
+    }
+    *operation_count = 0;
+    char *plan_data = NULL;
+    size_t plan_size = 0;
+    char plan_hash[65];
+    if (sd_read_source(plan_path, &plan_data, &plan_size, plan_hash,
+                       error, error_size) != 0) return NULL;
+    json_object *plan = parse_json_exact(plan_data, plan_size);
+    free(plan_data);
+    if (!plan || json_object_object_length(plan) != 3) {
+        if (plan) json_object_put(plan);
+        set_error(error, error_size, "link rewrite plan is not exact bounded JSON");
+        return NULL;
+    }
+    const char *schema = rewrite_json_string(plan, "schema", 96U);
+    const char *source_hash = rewrite_json_string(plan, "sourceSha256", 64U);
+    json_object *requested = NULL;
+    if (!schema || strcmp(schema, "synapse.doc.link-rewrite-plan/v1") != 0
+        || !source_hash || strlen(source_hash) != 64U
+        || strcmp(source_hash, index->source_sha256) != 0
+        || !json_object_object_get_ex(plan, "operations", &requested)
+        || !json_object_is_type(requested, json_type_array)
+        || json_object_array_length(requested) == 0
+        || json_object_array_length(requested) > SD_MAX_LINKS) {
+        json_object_put(plan);
+        set_error(error, error_size,
+                  "link rewrite plan schema, source hash or operation count is invalid");
+        return NULL;
+    }
+
+    json_object *root = json_object_new_object();
+    json_object *operations = json_object_new_array();
+    if (!root || !operations) goto allocation_failure;
+    json_object_object_add(root, "schema",
+                           json_object_new_string("synapse.doc.link-rewrite/v1"));
+    json_object_object_add(root, "sourceSha256",
+                           json_object_new_string(index->source_sha256));
+    json_object_object_add(root, "sourceBytes",
+                           json_object_new_int64((int64_t)index->source_bytes));
+
+    size_t previous_end = 0;
+    size_t count = json_object_array_length(requested);
+    for (size_t i = 0; i < count; i++) {
+        json_object *request = json_object_array_get_idx(requested, i);
+        if (!request || !json_object_is_type(request, json_type_object)
+            || json_object_object_length(request) != 7) {
+            set_error(error, error_size, "link rewrite operation is not exact");
+            goto invalid;
+        }
+        const char *kind_name = rewrite_json_string(request, "kind", 16U);
+        const char *heading = rewrite_json_string(request, "heading", SD_TARGET_LIMIT);
+        const char *block = rewrite_json_string(request, "block", SD_TARGET_LIMIT);
+        const char *label = rewrite_json_string(request, "label", SD_LINK_LABEL_LIMIT);
+        const char *new_target = rewrite_json_string(request, "newTarget", SD_TARGET_LIMIT);
+        size_t start = 0, end = 0;
+        sd_link_kind kind;
+        if (!kind_name || !heading || !block || !label || !new_target
+            || rewrite_kind(kind_name, &kind) != 0
+            || rewrite_json_size(request, "startByte", index->source_bytes, &start) != 0
+            || rewrite_json_size(request, "endByte", index->source_bytes, &end) != 0
+            || start >= end || (i > 0 && start < previous_end)) {
+            set_error(error, error_size, "link rewrite operation fields are invalid");
+            goto invalid;
+        }
+        previous_end = end;
+        const sd_link *link = find_rewrite_link(index, start, end);
+        if (!link || link->kind != kind || link->external
+            || strcmp(link->heading, heading) != 0
+            || strcmp(link->block, block) != 0
+            || strcmp(link->label, label) != 0
+            || link->target_start_byte > link->target_end_byte
+            || link->target_end_byte > index->source_bytes
+            || link->target_start_byte == link->target_end_byte) {
+            set_error(error, error_size,
+                      "link rewrite operation does not match parsed source");
+            goto invalid;
+        }
+        size_t replacement_start = 0, replacement_end = 0;
+        char *replacement = rewrite_text(index, link, new_target,
+                                         &replacement_start,
+                                         &replacement_end);
+        char *before = copy_range(index->source_data, replacement_start,
+                                  replacement_end, SD_INPUT_LIMIT);
+        if (!replacement || !before || strcmp(before, replacement) == 0) {
+            free(replacement);
+            free(before);
+            set_error(error, error_size,
+                      "link rewrite target is unsafe, unchanged or exceeds bound");
+            goto invalid;
+        }
+        json_object *item = json_object_new_object();
+        if (!item) {
+            free(replacement);
+            free(before);
+            goto allocation_failure;
+        }
+        json_object_object_add(item, "kind", json_object_new_string(kind_name));
+        json_object_object_add(item, "linkStartByte",
+                               json_object_new_int64((int64_t)link->start_byte));
+        json_object_object_add(item, "linkEndByte",
+                               json_object_new_int64((int64_t)link->end_byte));
+        json_object_object_add(item, "startByte",
+                               json_object_new_int64((int64_t)replacement_start));
+        json_object_object_add(item, "endByte",
+                               json_object_new_int64((int64_t)replacement_end));
+        json_object_object_add(item, "before", json_object_new_string(before));
+        json_object_object_add(item, "text", json_object_new_string(replacement));
+        free(replacement);
+        free(before);
+        json_object_array_add(operations, item);
+    }
+    json_object_object_add(root, "operations", operations);
+    operations = NULL;
+    const char *serialized = json_object_to_json_string_ext(
+        root, JSON_C_TO_STRING_PLAIN | JSON_C_TO_STRING_NOSLASHESCAPE);
+    size_t output_size = strlen(serialized);
+    if (output_size > SD_OUTPUT_LIMIT) {
+        set_error(error, error_size, "link rewrite output exceeds bound");
+        goto invalid;
+    }
+    char *copy = malloc(output_size + 1U);
+    if (!copy) goto allocation_failure;
+    memcpy(copy, serialized, output_size + 1U);
+    if (size_out) *size_out = output_size;
+    *operation_count = count;
+    json_object_put(root);
+    json_object_put(plan);
+    return copy;
+
+allocation_failure:
+    set_error(error, error_size, "cannot allocate bounded link rewrite result");
+invalid:
+    if (operations) json_object_put(operations);
+    if (root) json_object_put(root);
+    json_object_put(plan);
     return NULL;
 }

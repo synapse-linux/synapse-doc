@@ -7,7 +7,7 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 fixtures=$(cd "$(dirname "$0")/fixtures" && pwd)
 
-[[ $($binary --version) == 'synapse-doc 0.1.0-alpha.2' ]]
+[[ $($binary --version) == 'synapse-doc 0.1.0-alpha.3' ]]
 $binary --help | grep -Fq 'Markdown, AsciiDoc and reStructuredText'
 if command -v desktop-file-validate >/dev/null; then desktop-file-validate "$project/data/org.synapse.Doc.desktop"; fi
 
@@ -218,6 +218,114 @@ PY
 LC_ALL=C $binary links "$fixtures/knowledge.md" --format json >"$root/links-c.json"
 LC_ALL=it_IT.UTF-8 $binary links "$fixtures/knowledge.md" --format json >"$root/links-it.json"
 cmp "$root/links-c.json" "$root/links-it.json"
+
+# Link rewrite planning is read-only, source-hash-bound and uses internal target
+# ranges without changing the byte-identical links/v1 contract.
+cat >"$root/rewrite-source.md" <<'EOF'
+# Rewrite fixture
+
+[[Old note|Alias]] and ![[Old note#Section]].
+[Markdown](../Old.md#Part "Preserved title") and
+[Angle](<../Old note.md#Part>).
+EOF
+cp "$root/rewrite-source.md" "$root/rewrite-before.md"
+$binary links "$root/rewrite-source.md" --format json >"$root/rewrite-links.json"
+python - "$root/rewrite-source.md" "$root/rewrite-links.json" \
+         "$root/rewrite-plan.json" <<'PY'
+import json,sys
+source,links_path,plan_path=sys.argv[1:]
+links=json.load(open(links_path))
+targets={'wikilink':'folder/New note','embed':'folder/New note',
+         'markdown':'../folder/New title.md'}
+operations=[]
+markdown_seen=0
+for link in links['links']:
+    assert set(link)=={'kind','target','heading','block','label','external','startByte','endByte'}
+    target=targets[link['kind']]
+    if link['kind']=='markdown':
+        markdown_seen+=1
+        if markdown_seen==2: target='../folder/New note.md'
+    operations.append({
+        'kind':link['kind'],'startByte':link['startByte'],'endByte':link['endByte'],
+        'heading':link['heading'],'block':link['block'],'label':link['label'],
+        'newTarget':target})
+json.dump({'schema':'synapse.doc.link-rewrite-plan/v1',
+           'sourceSha256':links['sourceSha256'],'operations':operations},
+          open(plan_path,'w'),separators=(',',':'))
+PY
+$binary rewrite-links "$root/rewrite-source.md" --plan "$root/rewrite-plan.json" \
+  --format json >"$root/rewrite-result.json"
+$binary rewrite-links "$root/rewrite-source.md" --plan "$root/rewrite-plan.json" \
+  >"$root/rewrite-result.txt"
+grep -Fxq 'Markdown link rewrite: 4 exact replacements' \
+  "$root/rewrite-result.txt"
+cmp "$root/rewrite-source.md" "$root/rewrite-before.md"
+python - "$root/rewrite-source.md" "$root/rewrite-links.json" \
+         "$root/rewrite-result.json" "$root/rewritten.md" <<'PY'
+import hashlib,json,sys
+source_path,links_path,result_path,output_path=sys.argv[1:]
+data=open(source_path,'rb').read(); links=json.load(open(links_path)); result=json.load(open(result_path))
+assert set(result)=={'schema','sourceSha256','sourceBytes','operations'}
+assert result['schema']=='synapse.doc.link-rewrite/v1'
+assert result['sourceSha256']==hashlib.sha256(data).hexdigest()
+assert result['sourceBytes']==len(data) and len(result['operations'])==4
+for requested,operation in zip(links['links'],result['operations']):
+    assert set(operation)=={'kind','linkStartByte','linkEndByte','startByte','endByte','before','text'}
+    assert operation['kind']==requested['kind']
+    assert (operation['linkStartByte'],operation['linkEndByte'])==(requested['startByte'],requested['endByte'])
+    assert data[operation['startByte']:operation['endByte']].decode()==operation['before']
+    assert operation['linkStartByte'] <= operation['startByte'] < operation['endByte'] <= operation['linkEndByte']
+rewritten=data
+for operation in reversed(result['operations']):
+    start,end=operation['startByte'],operation['endByte']
+    assert rewritten[start:end].decode()==operation['before']
+    rewritten=rewritten[:start]+operation['text'].encode()+rewritten[end:]
+expected=(b'# Rewrite fixture\n\n'
+ b'[[folder/New note|Alias]] and ![[folder/New note#Section]].\n'
+ b'[Markdown](<../folder/New title.md#Part> "Preserved title") and\n'
+ b'[Angle](<../folder/New note.md#Part>).\n')
+assert rewritten==expected
+open(output_path,'wb').write(rewritten)
+PY
+$binary links "$root/rewritten.md" --format json | python -c '
+import json,sys
+j=json.load(sys.stdin)
+assert [(x["kind"],x["target"],x["heading"],x["label"]) for x in j["links"]]==[
+ ("wikilink","folder/New note","","Alias"),
+ ("embed","folder/New note","Section",""),
+ ("markdown","../folder/New title.md","Part","Markdown"),
+ ("markdown","../folder/New note.md","Part","Angle")]
+'
+
+# Stale, structurally mismatched, duplicate, unsafe and non-exact plans fail.
+python - "$root/rewrite-plan.json" "$root" <<'PY'
+import copy,json,os,sys
+base=json.load(open(sys.argv[1])); root=sys.argv[2]
+cases={}
+value=copy.deepcopy(base); value['sourceSha256']='0'*64; cases['stale']=value
+value=copy.deepcopy(base); value['operations'][0]['label']='different'; cases['label']=value
+value=copy.deepcopy(base); value['operations'].append(copy.deepcopy(value['operations'][0])); cases['order']=value
+value=copy.deepcopy(base); value['operations'][0]['newTarget']='unsafe#fragment'; cases['unsafe']=value
+value=copy.deepcopy(base); value['extra']=True; cases['extra']=value
+for name,value in cases.items():
+    json.dump(value,open(os.path.join(root,'rewrite-invalid-'+name+'.json'),'w'),separators=(',',':'))
+PY
+for plan in "$root"/rewrite-invalid-*.json; do
+  if $binary rewrite-links "$root/rewrite-source.md" --plan "$plan" \
+      --format json >/dev/null 2>&1; then
+    echo "accepted invalid link rewrite plan: $plan" >&2; exit 1
+  fi
+done
+ln -s rewrite-plan.json "$root/rewrite-plan-link.json"
+if $binary rewrite-links "$root/rewrite-source.md" \
+    --plan "$root/rewrite-plan-link.json" --format json >/dev/null 2>&1; then
+  echo 'followed link rewrite plan symlink' >&2; exit 1
+fi
+LC_ALL=C $binary rewrite-links "$root/rewrite-source.md" \
+  --plan "$root/rewrite-plan.json" --format json >"$root/rewrite-c.json"
+LC_ALL=it_IT.UTF-8 $binary rewrite-links "$root/rewrite-source.md" \
+  --plan "$root/rewrite-plan.json" --format json >"$root/rewrite-it.json"
+cmp "$root/rewrite-c.json" "$root/rewrite-it.json"
 
 printf '%s\n' '` unmatched [[literal-after-backtick]] and [empty]()' >"$root/unmatched-inline.md"
 $binary links "$root/unmatched-inline.md" --format json | python -c '
